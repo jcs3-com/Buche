@@ -1,0 +1,41 @@
+id,title,author,isbn,status,rating,started,finished,notes,cover_override,year_pub,genre,carousel
+b000,Neuromancer,William Gibson,,Finished,5,,2026-01-01,,,1984,Science Fiction,
+b001,The Snow Leopard,Peter Matthiessen,,To Read,,,,,,1978,Travel / Adventure,Wanderlust #1
+b002,Travels with a Tangerine,Tim Mackintosh-Smith,,To Read,,,,,,2001,Travel / Adventure,Wanderlust #1
+b003,Behind the Wall: A Journey Through China,Colin Thubron,,To Read,,,,,,1987,Travel / Adventure,Wanderlust #1
+b004,Tracks,Robyn Davidson,,To Read,,,,,,1980,Travel / Adventure,Wanderlust #1
+b005,Journey Without Maps,Graham Greene,,To Read,,,,,,1936,Travel / Adventure,Wanderlust #1
+b006,Black Lamb and Grey Falcon,Rebecca West,,To Read,,,,,,1941,Travel / Adventure,Wanderlust #1
+b007,West with the Night,Beryl Markham,,To Read,,,,,,1942,Travel / Adventure,Wanderlust #1
+b008,The Way of the World,Nicolas Bouvier,,To Read,,,,,,1963,Travel / Adventure,Wanderlust #1
+b009,Full Tilt: Ireland to India with a Bicycle,Dervla Murphy,,To Read,,,,,,1965,Travel / Adventure,Wanderlust #1
+b010,The Cruel Way,Ella K. Maillart,,To Read,,,,,,1947,Travel / Adventure,Wanderlust #1
+b011,Zanoni,Edward Bulwer-Lytton,,To Read,,,,,,1842,Literary / Esoteric,High For This
+b012,Moonchild,Aleister Crowley,,To Read,,,,,,1929,Literary / Esoteric,High For This
+b013,The Magician,W. Somerset Maugham,,To Read,,,,,,1908,Literary / Esoteric,High For This
+b014,The Manuscript Found in Saragossa,Jan Potocki,,To Read,,,,,,1815,Literary / Esoteric,High For This
+b015,Sylvie,Gérard de Nerval,,To Read,,,,,,1853,Literary / Esoteric,High For This
+b016,The Obscene Bird of Night,José Donoso,,To Read,,,,,,1970,Literary / Esoteric,High For This
+b017,The Opposing Shore,Julien Gracq,,To Read,,,,,,1951,Literary / Esoteric,High For This
+b018,The World of Null-A,A.E. Van Vogt,,To Read,,,,,,1945,Literary / Esoteric,High For This
+b019,The Hill of Dreams,Arthur Machen,,To Read,,,,,,1907,Literary / Esoteric,High For This
+b020,The Other Side,Alfred Kubin,,To Read,,,,,,1909,Literary / Esoteric,High For This
+b021,A Time of Gifts,Patrick Leigh Fermor,,To Read,,,,,,1977,Travel / Adventure,Wanderlust #1
+b022,Arabian Sands,Wilfred Thesiger,,To Read,,,,,,1959,Travel / Adventure,Wanderlust #1
+b023,The Valleys of the Assassins,Freya Stark,,To Read,,,,,,1934,Travel / Adventure,Wanderlust #1
+b024,A Dragon Apparent,Norman Lewis,,To Read,,,,,,1951,Travel / Adventure,Wanderlust #1
+b025,The Phantom Atlas,Edward Brooke-Hitching,,To Read,,,,,,2016,History / Geography,Frank Ocean Lost
+b026,History of Cartography,Leo Bagrow,,To Read,,,,,,1964,History / Geography,Frank Ocean Lost
+b027,The Piri Reis Map of 1513,Gregory C. McIntosh,,To Read,,,,,,2000,History / Geography,Frank Ocean Lost
+b028,The Lost History of Christianity,Philip Jenkins,,To Read,,,,,,2008,History / Geography,Frank Ocean Lost
+b029,When China Ruled the Seas,Louise Levathes,,To Read,,,,,,1994,History / Geography,Frank Ocean Lost
+b030,The Secret History of the Mongols,Anonymous,,To Read,,,,,,1240,History / Geography,Frank Ocean Lost
+b031,Genghis Khan and the Making of the Modern World,Jack Weatherford,,To Read,,,,,,2004,History / Geography,Frank Ocean Lost
+b032,Lost Enlightenment: Central Asia's Golden Age,S. Frederick Starr,,To Read,,,,,,2013,History / Geography,Frank Ocean Lost
+b033,Empires of the Silk Road,Christopher I. Beckwith,,To Read,,,,,,2009,History / Geography,Frank Ocean Lost
+b034,The Ancient Mariners,Lionel Casson,,To Read,,,,,,1959,History / Geography,Frank Ocean Lost
+b035,The World and All the Things Upon It,David A. Chang,,To Read,,,,,,2016,History / Geography,Frank Ocean Lost
+b036,Before Civilization,Colin Renfrew,,To Read,,,,,,1973,History / Geography,Frank Ocean Lost
+b037,Prehistory of the Eastern Sahara,Fred Wendorf & Romuald Schild,,To Read,,,,,,1984,History / Geography,Frank Ocean Lost
+b038,Experiments in Egyptian Archaeology,Denys A. Stocks,,To Read,,,,,,2003,History / Geography,Frank Ocean Lost
+b039,Among the Believers,V.S. Naipaul,,To Read,,,,,,1981,Travel / Adventure,Wanderlust #1

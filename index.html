@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Books · jcs3</title>
+<meta name="description" content="A personal reading log." />
+<link rel="stylesheet" href="books.css" />
+</head>
+<body>
+
+<header class="bt-header">
+  <div>
+    <h1>Books</h1>
+    <p class="bt-sub">A personal reading log.</p>
+  </div>
+  <a href="/" class="bt-back" aria-label="Back to home">← jcs3.com</a>
+</header>
+
+<section class="bt-stats" id="bt-stats" aria-label="Reading stats"></section>
+
+<!-- Add a book -->
+<section class="bt-addbar">
+  <button id="bt-add-toggle" class="bt-add-toggle">+ Add a book</button>
+  <button id="bt-import-toggle" class="bt-add-toggle bt-import-toggle">⇪ Bulk import</button>
+
+  <!-- Bulk import: paste CSV/TSV/Markdown or upload a file -->
+  <div id="bt-import-panel" class="bt-add-panel bt-import-panel" hidden>
+    <p class="bt-import-help">
+      Paste a list (CSV, TSV, a Markdown table, or one book per line like
+      <code>Title — Author</code> / <code>Title by Author</code>), or upload a
+      <code>.csv</code> / <code>.md</code> / <code>.txt</code> / <code>.xlsx</code> file.
+      Duplicates (matched on title + author) are flagged and skipped by default.
+    </p>
+    <textarea id="bt-import-text" class="bt-import-text" rows="6"
+      placeholder="The Snow Leopard — Peter Matthiessen&#10;Dune by Frank Herbert&#10;title,author,status&#10;Neuromancer,William Gibson,read"></textarea>
+    <div class="bt-import-controls">
+      <label class="bt-btn-secondary bt-file-label">
+        Choose file…
+        <input type="file" id="bt-import-file" accept=".csv,.tsv,.md,.markdown,.txt,.xlsx" hidden />
+      </label>
+      <span id="bt-import-filename" class="bt-import-filename"></span>
+      <span class="bt-import-spacer"></span>
+      <button type="button" id="bt-import-preview" class="bt-btn-secondary">Preview</button>
+      <button type="button" id="bt-import-cancel" class="bt-btn-secondary">Cancel</button>
+    </div>
+    <div id="bt-import-result" class="bt-import-result" hidden></div>
+    <p id="bt-import-msg" class="bt-form-msg" hidden></p>
+  </div>
+
+  <div id="bt-add-panel" class="bt-add-panel" hidden>
+    <div class="bt-search-wrap" id="bt-search-wrap">
+      <input
+        type="text"
+        id="bt-book-search"
+        class="bt-book-search"
+        placeholder="Search title, author, or ISBN…"
+        autocomplete="off"
+        aria-label="Search for a book to add"
+      />
+      <div id="bt-search-results" class="bt-search-results" hidden></div>
+    </div>
+
+    <!-- Entry form (hidden until a book is picked or manual-add chosen) -->
+    <form id="bt-entry-form" class="bt-entry-form" hidden>
+      <div class="bt-form-cover">
+        <div class="bt-cover" id="bt-form-cover-box"><span>No cover</span></div>
+      </div>
+      <div class="bt-form-fields">
+        <p class="bt-form-mode" id="bt-form-mode" hidden></p>
+        <label>Title<input type="text" name="title" required /></label>
+        <label>Author<input type="text" name="author" /></label>
+        <label>ISBN<input type="text" name="isbn" placeholder="ISBN-13 preferred" /></label>
+
+        <div class="bt-form-row">
+          <label>Status
+            <select name="status">
+              <option value="tbr">To read</option>
+              <option value="reading">Reading</option>
+              <option value="read">Read</option>
+              <option value="dnf">DNF</option>
+            </select>
+          </label>
+          <label>Rating
+            <select name="rating">
+              <option value="">—</option>
+              <option value="1">★</option>
+              <option value="2">★★</option>
+              <option value="3">★★★</option>
+              <option value="4">★★★★</option>
+              <option value="5">★★★★★</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="bt-form-row">
+          <label>Started<input type="date" name="started" /></label>
+          <label>Finished<input type="date" name="finished" /></label>
+        </div>
+
+        <label>Notes<textarea name="notes" rows="2"></textarea></label>
+        <label>Cover URL (optional override)<input type="text" name="cover_override" placeholder="Used if no cover found" /></label>
+
+        <div class="bt-form-row">
+          <label>Year published<input type="text" name="year_pub" inputmode="numeric" placeholder="e.g. 1984" /></label>
+          <label>Genre<input type="text" name="genre" placeholder="e.g. Travel / Adventure" /></label>
+        </div>
+        <label>Carousels<input type="text" name="carousel" placeholder="Comma-separated, e.g. Wanderlust #1, Frank Ocean Lost" /></label>
+
+        <div class="bt-form-actions">
+          <button type="button" id="bt-cancel" class="bt-btn-secondary">Cancel</button>
+          <button type="submit" id="bt-save" class="bt-btn-primary">Save book</button>
+        </div>
+        <p id="bt-form-msg" class="bt-form-msg" hidden></p>
+      </div>
+    </form>
+  </div>
+</section>
+
+<!-- Themed shelves (carousels). Orthogonal to the status filter below. -->
+<section class="bt-shelves" id="bt-shelves" aria-label="Themed shelves" hidden></section>
+
+<nav class="bt-tabs" id="bt-tabs" aria-label="Filter by status">
+  <button class="bt-tab active" data-f="all">All</button>
+  <button class="bt-tab" data-f="reading">Reading</button>
+  <button class="bt-tab" data-f="read">Read</button>
+  <button class="bt-tab" data-f="tbr">To read</button>
+  <button class="bt-tab" data-f="dnf">DNF</button>
+</nav>
+
+<div class="bt-controls">
+  <input type="search" id="bt-search" placeholder="Filter your library…" aria-label="Filter library" />
+  <select id="bt-sort" aria-label="Sort books">
+    <option value="date-desc">Newest finished first</option>
+    <option value="date-asc">Oldest finished first</option>
+    <option value="rating-desc">Highest rated</option>
+    <option value="title">Title A–Z</option>
+    <option value="author">Author A–Z</option>
+  </select>
+</div>
+
+<main id="bt-grid" class="bt-grid" aria-live="polite">
+  <p class="bt-loading">Loading books…</p>
+</main>
+
+<footer class="bt-footer">
+  <p>Data: Google Sheets · Covers &amp; search: Open Library + Google Books</p>
+</footer>
+
+<script src="books.js"></script>
+</body>
+</html>

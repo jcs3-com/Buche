@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Buche · Cover-screenshot intake</title>
+<style>
+  :root{
+    --bg:#fafaf7; --surface:#fff; --surface2:#f1efe8; --text:#1a1a1a; --text2:#5f5e5a;
+    --border:rgba(0,0,0,.12); --border2:rgba(0,0,0,.2); --accent:#185fa5; --danger:#791f1f;
+    --read-bg:#E1F5EE; --read-fg:#085041; --r:8px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#141413; --surface:#1c1c1b; --surface2:#262625; --text:#f5f4ee; --text2:#b4b2a9;
+      --border:rgba(255,255,255,.12); --border2:rgba(255,255,255,.2); --accent:#85B7EB; }
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.55; padding:2rem 1.25rem 4rem;
+    max-width:760px; margin:0 auto; }
+  h1{ font-size:24px; font-weight:500; margin:0 0 4px; }
+  .sub{ color:var(--text2); font-size:14px; margin:0 0 1.5rem; }
+  .card{ background:var(--surface); border:.5px solid var(--border); border-radius:12px;
+    padding:1.25rem; margin-bottom:1.25rem; }
+  .drop{ border:1.5px dashed var(--border2); border-radius:var(--r); padding:2rem 1rem; text-align:center;
+    color:var(--text2); font-size:14px; cursor:pointer; transition:border-color .15s, background .15s; }
+  .drop.drag{ border-color:var(--accent); background:var(--surface2); }
+  .drop img{ max-height:240px; max-width:100%; border-radius:6px; }
+  input[type=file]{ display:none; }
+  button{ font:inherit; font-size:14px; font-weight:500; padding:9px 16px; border-radius:var(--r);
+    cursor:pointer; border:.5px solid var(--border2); background:var(--surface); color:var(--text); }
+  button.primary{ background:var(--accent); color:#fff; border:none; }
+  button:disabled{ opacity:.5; cursor:default; }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  label{ display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--text2); }
+  input[type=text], select{ font:inherit; font-size:14px; padding:7px 10px; border-radius:var(--r);
+    border:.5px solid var(--border); background:var(--bg); color:var(--text); }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .cand{ display:flex; gap:10px; align-items:center; width:100%; text-align:left; padding:8px;
+    border:.5px solid var(--border); border-radius:var(--r); background:transparent; margin-bottom:6px; }
+  .cand:hover{ background:var(--surface2); }
+  .cand img{ width:34px; height:50px; object-fit:cover; border-radius:3px; flex-shrink:0; background:var(--surface2); }
+  .cand .t{ font-size:14px; font-weight:500; }
+  .cand .a{ font-size:12px; color:var(--text2); }
+  .msg{ font-size:13px; margin-top:10px; }
+  .msg.err{ color:var(--danger); }
+  .muted{ color:var(--text2); font-size:13px; }
+  code{ background:var(--surface2); padding:1px 5px; border-radius:4px; font-size:12px; }
+  .hidden{ display:none; }
+  .setup{ font-size:12px; color:var(--text2); border:.5px solid var(--border); border-radius:var(--r);
+    padding:10px 12px; background:var(--surface2); margin-bottom:1.25rem; }
+</style>
+</head>
+<body>
+  <h1>Cover-screenshot intake</h1>
+  <p class="sub">Snap a book cover → Claude reads the title &amp; author → confirm against Google Books / Open Library → you approve → it writes to your Sheet. Runs as a Claude artifact (uses the in-artifact Anthropic API).</p>
+
+  <div class="setup">
+    <strong>Setup:</strong> set <code>WRITE_URL</code> and <code>SHARED_SECRET</code> at the top of this file's script
+    to match your deployed <code>Code.gs</code>. Writing won't work until both are set.
+  </div>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <span id="drop-label">Drop a cover image here, or click to choose one</span>
+      <input type="file" id="file" accept="image/*" />
+    </div>
+    <div class="row">
+      <button class="primary" id="read-btn" disabled>Read cover</button>
+      <span id="read-msg" class="msg"></span>
+    </div>
+  </div>
+
+  <div class="card hidden" id="confirm-card">
+    <h3 style="margin:0 0 8px;font-size:15px;font-weight:500;">Confirm the match</h3>
+    <p class="muted" id="detected"></p>
+    <div id="candidates"></div>
+    <button id="research-btn" style="margin-top:6px;">Re-search</button>
+  </div>
+
+  <div class="card hidden" id="form-card">
+    <h3 style="margin:0 0 10px;font-size:15px;font-weight:500;">Review &amp; add</h3>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <label>Title<input type="text" id="f-title" /></label>
+      <label>Author<input type="text" id="f-author" /></label>
+      <div class="grid2">
+        <label>ISBN<input type="text" id="f-isbn" /></label>
+        <label>Year<input type="text" id="f-year" /></label>
+      </div>
+      <div class="grid2">
+        <label>Status
+          <select id="f-status">
+            <option value="tbr">To read</option><option value="reading">Reading</option>
+            <option value="read">Read</option><option value="dnf">DNF</option>
+          </select>
+        </label>
+        <label>Genre<input type="text" id="f-genre" /></label>
+      </div>
+      <label>Carousels (comma-separated)<input type="text" id="f-carousel" /></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="add-btn">Add to library</button>
+      <button id="reset-btn">Start over</button>
+      <span id="add-msg" class="msg"></span>
+    </div>
+  </div>
+
+<script>
+// ===== CONFIG — match your deployed Code.gs =====
+const WRITE_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
+const SHARED_SECRET = "CHANGE_ME_to_any_random_string_then_match_in_Code_gs";
+
+let imageData = null, imageMime = null, detected = null;
+
+const $ = id => document.getElementById(id);
+function setupIncomplete(){ return WRITE_URL.startsWith("PASTE_") || SHARED_SECRET.startsWith("CHANGE_ME"); }
+
+// ---- image intake ----
+const drop = $("drop"), fileInput = $("file");
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("drag");
+  if (e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", e => { if (e.target.files[0]) loadImage(e.target.files[0]); });
+
+function loadImage(file){
+  if (!file.type.startsWith("image/")) { setMsg("read-msg", "That's not an image.", true); return; }
+  imageMime = file.type;
+  const reader = new FileReader();
+  reader.onload = () => {
+    imageData = reader.result.split(",")[1];
+    $("drop-label").innerHTML = "";
+    drop.innerHTML = `<img src="${reader.result}" alt="cover preview" />`;
+    $("read-btn").disabled = false;
+    setMsg("read-msg", "");
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- vision: read title/author off the cover ----
+$("read-btn").addEventListener("click", readCover);
+async function readCover(){
+  if (!imageData) return;
+  $("read-btn").disabled = true;
+  setMsg("read-msg", "Reading cover…");
+  try{
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: imageMime, data: imageData } },
+            { type: "text", text: "This is a book cover. Return ONLY a JSON object with keys \"title\" and \"author\" (strings). No markdown, no prose. If a field is unreadable, use an empty string." }
+          ]
+        }]
+      })
+    });
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const clean = text.replace(/```json|```/g, "").trim();
+    detected = JSON.parse(clean);
+    if (!detected.title) throw new Error("No title detected");
+    setMsg("read-msg", "");
+    $("detected").textContent = `Detected: “${detected.title}” — ${detected.author || "unknown"}`;
+    $("confirm-card").classList.remove("hidden");
+    await runConfirm();
+  }catch(err){
+    setMsg("read-msg", "Couldn't read the cover: " + err.message, true);
+    $("read-btn").disabled = false;
+  }
+}
+
+// ---- confirm against Google Books + Open Library ----
+$("research-btn").addEventListener("click", runConfirm);
+async function runConfirm(){
+  const q = (detected.title + " " + (detected.author || "")).trim();
+  $("candidates").innerHTML = `<p class="muted">Searching…</p>`;
+  let cands = [];
+  try{
+    const [g, o] = await Promise.allSettled([searchGoogle(q), searchOpenLib(q)]);
+    if (g.status === "fulfilled") cands = cands.concat(g.value);
+    if (o.status === "fulfilled") cands = cands.concat(o.value);
+  }catch(e){ /* ignore */ }
+  cands = cands.slice(0, 6);
+  renderCandidates(cands);
+}
+async function searchGoogle(q){
+  const r = await fetch("https://www.googleapis.com/books/v1/volumes?q=" + encodeURIComponent(q) + "&maxResults=5");
+  const d = await r.json();
+  return (d.items || []).map(it => {
+    const v = it.volumeInfo || {}, ids = v.industryIdentifiers || [];
+    const i13 = ids.find(x => x.type === "ISBN_13"), i10 = ids.find(x => x.type === "ISBN_10");
+    return { title: v.title || "", author: (v.authors || []).join(", "), isbn: (i13 || i10 || {}).identifier || "",
+      year: (v.publishedDate || "").slice(0,4), cover: v.imageLinks ? v.imageLinks.thumbnail.replace(/^http:/,"https:") : "" };
+  }).filter(b => b.title);
+}
+async function searchOpenLib(q){
+  const r = await fetch("https://openlibrary.org/search.json?q=" + encodeURIComponent(q) + "&limit=5&fields=title,author_name,isbn,first_publish_year,cover_i");
+  const d = await r.json();
+  return (d.docs || []).map(x => ({ title: x.title || "", author: (x.author_name || []).join(", "),
+    isbn: (x.isbn || [])[0] || "", year: x.first_publish_year ? String(x.first_publish_year) : "",
+    cover: x.cover_i ? `https://covers.openlibrary.org/b/id/${x.cover_i}-S.jpg` : "" })).filter(b => b.title);
+}
+function renderCandidates(cands){
+  const box = $("candidates");
+  if (!cands.length){ box.innerHTML = `<p class="muted">No matches. You can still add it manually below.</p>`; pickCandidate(detected); return; }
+  box.innerHTML = "";
+  cands.forEach(c => {
+    const b = document.createElement("button");
+    b.className = "cand";
+    b.innerHTML = `${c.cover ? `<img src="${c.cover}" alt=""/>` : `<span class="img"></span>`}
+      <span><span class="t">${esc(c.title)}</span><br/><span class="a">${esc(c.author || "Unknown")}${c.year ? " · " + c.year : ""}${c.isbn ? " · " + c.isbn : ""}</span></span>`;
+    b.addEventListener("click", () => pickCandidate(c));
+    box.appendChild(b);
+  });
+}
+
+// ---- review form ----
+function pickCandidate(c){
+  $("f-title").value = c.title || detected.title || "";
+  $("f-author").value = c.author || detected.author || "";
+  $("f-isbn").value = (c.isbn || "").replace(/[^0-9Xx]/g, "");
+  $("f-year").value = c.year || "";
+  $("f-status").value = "tbr";
+  $("f-genre").value = "";
+  $("f-carousel").value = "";
+  $("form-card").classList.remove("hidden");
+  $("form-card").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ---- write ----
+$("add-btn").addEventListener("click", addBook);
+async function addBook(){
+  if (setupIncomplete()){ setMsg("add-msg", "Set WRITE_URL and SHARED_SECRET first.", true); return; }
+  if (!$("f-title").value.trim()){ setMsg("add-msg", "Title required.", true); return; }
+  const book = {
+    title: $("f-title").value.trim(), author: $("f-author").value.trim(),
+    isbn: $("f-isbn").value.replace(/[^0-9Xx]/g, ""), status: $("f-status").value,
+    rating: "", started: "", finished: "", notes: "", cover_override: "",
+    year_pub: $("f-year").value.trim(), genre: $("f-genre").value.trim(), carousel: $("f-carousel").value.trim()
+  };
+  $("add-btn").disabled = true;
+  setMsg("add-msg", "Adding…");
+  try{
+    const res = await fetch(WRITE_URL, {
+      method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ secret: SHARED_SECRET, action: "add", book })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Unknown error");
+    setMsg("add-msg", "Added as " + (data.id || "ok") + ". ✓");
+  }catch(err){
+    setMsg("add-msg", "Failed: " + err.message, true);
+  }finally{
+    $("add-btn").disabled = false;
+  }
+}
+
+$("reset-btn").addEventListener("click", () => location.reload());
+
+function setMsg(id, t, err){ const e = $(id); e.textContent = t; e.className = "msg" + (err ? " err" : ""); }
+function esc(s){ return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m])); }
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Local secrets — never commit a real shared secret or exec URL.
+# If you split config out, keep the real one local:
+config.local.js
+*.local.js
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Node (only used for local testing, never deployed)
+node_modules/
+npm-debug.log*
