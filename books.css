@@ -224,6 +224,22 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* "Find at DCPL" Libby deep-link. Shared by grid cards (.bt-card, rendered
+   after .bt-row) and shelf cards (.bt-shelf-card, rendered after .bt-pill).
+   Both are flex columns whose preceding element carries margin-top:auto, so
+   the link clusters at the card bottom. align-self:flex-start keeps the click
+   target to the text width; --bt-accent has light + dark values already. */
+.bt-libby {
+  align-self: flex-start;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--bt-accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.bt-libby:hover { text-decoration: underline; }
+
 .bt-loading, .bt-empty, .bt-error {
   grid-column: 1 / -1;
   text-align: center;
