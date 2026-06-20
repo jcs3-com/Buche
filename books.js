@@ -13,9 +13,10 @@
 
 const SHEET_ID = "1KKIvqsmxjh0s8uXwYYEeD6C_5sq7xRdEpc0FofPPHTM";
 const SHEET_NAME = "Sheet1";
+const LIBBY_LIBRARY = "dclibrary"; // DCPL Libby key; confirm once via libbyapp.com URL
 
-const WRITE_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
-const SHARED_SECRET = "CHANGE_ME_to_any_random_string_then_match_in_books_js";
+const WRITE_URL = "https://script.google.com/macros/s/AKfycbzHLjRPwP1HCFotfPdHf843pSsNHZ55bQbT_KDu8Z5vUu1R_pCIRB9DSE7DEbGOCPWx7A/exec";
+const SHARED_SECRET = "shar3dsecret123";
 
 const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
 
@@ -911,6 +912,14 @@ function coverInnerFor(b) {
   return coverSrc
     ? `<img class="bt-cover-img" src="${escapeAttr(coverSrc)}" data-override="${escapeAttr(b.coverOverride)}" alt="${escapeAttr(b.title)} cover" loading="lazy" />`
     : `<span>${escapeHTML(b.title)}</span>`;
+}
+
+function libbyURL(b) {
+  const isbn = (b.isbn || "").replace(/[^0-9Xx]/g, "");
+  const q = isbn.length >= 10
+    ? isbn
+    : [b.title, (b.author && b.author !== "Unknown") ? b.author : ""].filter(Boolean).join(" ");
+  return `https://libbyapp.com/search/${LIBBY_LIBRARY}/search/scope-auto/query-${encodeURIComponent(q)}/page-1`;
 }
 
 function cardHTML(b) {
