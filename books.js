@@ -897,21 +897,85 @@ function sorter(mode) {
 
 const STATUS_LABELS = { reading: "Reading", read: "Read", tbr: "To read", dnf: "DNF" };
 
-/* Resolve a book's cover source: ISBN-derived (preferred) -> override -> "".
-   The ?default=false forces a 404 the <img> onerror can catch. */
-function coverSrcFor(b) {
-  return b.isbn
-    ? `https://covers.openlibrary.org/b/isbn/${b.isbn}-M.jpg?default=false`
-    : (b.coverOverride || "");
+/* ---- Cover resolution (Layer 1: multi-candidate cascade) -----------------
+   A book's cover is resolved by trying an ORDERED list of URLs. The <img>
+   onerror handler (handleCoverError) walks the list until one loads or the
+   list is exhausted, at which point a text placeholder is swapped in.
+
+   This widens the old single-URL path to recover two common failure modes:
+     - Open Library files the cover under the OTHER ISBN form (10 vs 13);
+       we try both.
+     - The ISBN cell carries Sheets cruft (hyphens, a leading apostrophe,
+       a float-coercion artifact); normalizeIsbn strips it before building
+       the URL.
+   Then cover_override (http upgraded to https) is the final image source
+   before the text placeholder.
+
+   Deliberately NOT auto-trying the Google Books content-by-ISBN endpoint:
+   when Google lacks a cover it returns HTTP 200 with a gray "image not
+   available" GIF rather than a 404, which would STOP the onerror cascade on
+   that gray box instead of falling through to our clean text placeholder.
+   Verified-thumbnail backfill belongs in the enrichment pipeline (Layer 2),
+   written into cover_override. To opt in regardless, uncomment the marked
+   push() in coverCandidates() and accept the occasional gray box. */
+
+function normalizeIsbn(raw) {
+  if (raw == null) return "";
+  let s = String(raw).trim().toUpperCase();
+  if (/E\+?\d+$/.test(s) && s.includes(".")) {        // float-coercion artifact, e.g. 9.78044E+12
+    const n = Number(s);
+    if (Number.isFinite(n)) s = n.toLocaleString("en-US", { useGrouping: false });
+  }
+  return s.replace(/[^0-9X]/g, "");
+}
+function isbn13Check(f) { let s = 0; for (let i = 0; i < 12; i++) s += (i % 2 ? 3 : 1) * Number(f[i]); return (10 - (s % 10)) % 10; }
+function isbn10Check(f) { let s = 0; for (let i = 0; i < 9; i++) s += (10 - i) * Number(f[i]); const c = (11 - (s % 11)) % 11; return c === 10 ? "X" : String(c); }
+function isbn10to13(x) { if (x.length !== 10) return ""; const c = "978" + x.slice(0, 9); return c + String(isbn13Check(c)); }
+function isbn13to10(x) { if (x.length !== 13 || !x.startsWith("978")) return ""; const c = x.slice(3, 12); return c + isbn10Check(c); }
+
+/* Both ISBN forms (deduped) so an OL cover filed under either is found. */
+function isbnForms(raw) {
+  const s = normalizeIsbn(raw);
+  if (s.length !== 10 && s.length !== 13) return s ? [s] : [];
+  const forms = new Set([s]);
+  if (s.length === 10) { const t = isbn10to13(s); if (t) forms.add(t); }
+  if (s.length === 13) { const t = isbn13to10(s); if (t) forms.add(t); }
+  return [...forms];
+}
+function httpsUpgrade(url) { return typeof url === "string" ? url.replace(/^http:\/\//i, "https://") : url; }
+
+/* Ordered cover-URL candidates for a book. First to load wins; exhaustion
+   -> text placeholder. Empty (no ISBN, no override) -> placeholder. */
+function coverCandidates(b) {
+  const out = [];
+  for (const isbn of isbnForms(b.isbn)) {
+    out.push(`https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`);
+  }
+  const ov = (b.coverOverride || "").trim();
+  if (ov) out.push(httpsUpgrade(ov));
+  // OPT-IN (see note above): Google Books cover-by-ISBN. May show a gray
+  // "no image" box instead of falling through, because it 200s on misses.
+  // for (const isbn of isbnForms(b.isbn)) {
+  //   out.push(`https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=1`);
+  // }
+  return out;
 }
 
-/* Inner markup for a cover box: <img> with override fallback, or a text
-   placeholder when there's no source. Shared by grid + shelf cards. */
+/* First (best) candidate, or "" — used for the edit-form cover preview. */
+function coverSrcFor(b) {
+  return coverCandidates(b)[0] || "";
+}
+
+/* Inner markup for a cover box: an <img> seeded with the first candidate and
+   carrying the full ordered candidate list (JSON in a data-attr) plus a
+   cursor (data-ci); handleCoverError advances the cursor on each failure.
+   No candidates -> text placeholder. Shared by grid + shelf cards. */
 function coverInnerFor(b) {
-  const coverSrc = coverSrcFor(b);
-  return coverSrc
-    ? `<img class="bt-cover-img" src="${escapeAttr(coverSrc)}" data-override="${escapeAttr(b.coverOverride)}" alt="${escapeAttr(b.title)} cover" loading="lazy" />`
-    : `<span>${escapeHTML(b.title)}</span>`;
+  const candidates = coverCandidates(b);
+  if (!candidates.length) return `<span>${escapeHTML(b.title)}</span>`;
+  return `<img class="bt-cover-img" src="${escapeAttr(candidates[0])}"`
+    + ` data-candidates="${escapeAttr(JSON.stringify(candidates))}" data-ci="0"`
+    + ` alt="${escapeAttr(b.title)} cover" loading="lazy" />`;
 }
 
 function libbyURL(b) {
@@ -953,10 +1017,22 @@ function cardHTML(b) {
     </article>`;
 }
 
+/* Advance through the cover candidate list on each load failure; when the
+   list is exhausted, swap in a text placeholder. The error listener attached
+   in render()/renderCarousels() persists across src changes, so each failed
+   candidate re-fires this and walks one step further. */
 function handleCoverError(img) {
-  const override = img.dataset.override;
-  if (override && img.src !== override) { img.src = override; return; }
-  const title = img.alt.replace(/ cover$/, "");
+  let candidates = [];
+  try { candidates = JSON.parse(img.dataset.candidates || "[]"); }
+  catch (e) { candidates = []; }
+  let ci = parseInt(img.dataset.ci || "0", 10);
+  ci += 1;
+  if (ci < candidates.length) {
+    img.dataset.ci = String(ci);
+    img.src = candidates[ci];
+    return;
+  }
+  const title = (img.alt || "").replace(/ cover$/, "");
   img.parentElement.innerHTML = `<span>${escapeHTML(title)}</span>`;
 }
 
