@@ -915,10 +915,13 @@ function coverInnerFor(b) {
 }
 
 function libbyURL(b) {
-  const isbn = (b.isbn || "").replace(/[^0-9Xx]/g, "");
-  const q = isbn.length >= 10
-    ? isbn
-    : [b.title, (b.author && b.author !== "Unknown") ? b.author : ""].filter(Boolean).join(" ");
+  // Title/author only — never ISBN. A print ISBN (what enrichment fetches) rarely
+  // matches the library's licensed ebook/audiobook edition (own ISBN), so ISBN
+  // search on OverDrive tends to return zero hits. Title+author matches whatever
+  // edition DCPL actually licensed; author dropped when "Unknown" → title-only.
+  const q = [b.title, (b.author && b.author !== "Unknown") ? b.author : ""]
+    .filter(Boolean)
+    .join(" ");
   return `https://libbyapp.com/search/${LIBBY_LIBRARY}/search/scope-auto/query-${encodeURIComponent(q)}/page-1`;
 }
 
