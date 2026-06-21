@@ -6,6 +6,12 @@
               by the stable `id` (b000, b001, …), never by row position.
    PHASE 1  — enrichment:      enrichBatch() backfills isbn / cover_override /
               year_pub from Google Books + Open Library, BY ID, blanks only.
+   LAYER 2  — verified covers: enrichBatch() now VERIFIES that a real cover
+              exists before trusting it (Open Library by ISBN, both ISBN
+              forms; falls to a verified Google/OL cover URL written into
+              cover_override only when OL is DEFINITIVELY empty), and replaces
+              the write-once `enrich_tried` flag with a retry state machine so
+              cover-less rows are revisited instead of stranded.
 
    DEPLOY (write endpoint):
      Save -> Deploy -> New deployment -> Web app ->
@@ -16,6 +22,8 @@
      Deploy. The /exec URL stays the same.
 
    SHARED_SECRET below MUST match SHARED_SECRET in books.js exactly.
+   >>> This line is the ONE manual edit on overwrite: restore YOUR real secret
+   >>> (the value already in books.js). Do NOT deploy with the CHANGE_ME stub. <<<
 */
 
 const SHARED_SECRET = "CHANGE_ME_to_any_random_string_then_match_in_books_js";
@@ -35,6 +43,12 @@ COLUMNS.forEach(function (name, i) { COL[name] = i; }); // 0-based index map
 
 const ENRICH_TRIED_HEADER = "enrich_tried"; // Phase 1 marker column (col 14)
 const ENRICH_BATCH = 15;                     // rows processed per run
+
+// Layer 2 tuning
+const MAX_ATTEMPTS = 3;            // cover/meta retries before "exhausted"
+const MIN_COVER_BYTES = 1500;     // 200-with-tiny-placeholder guard
+const ENRICH_SLEEP_MS = 250;      // politeness delay between rows
+const ENRICH_MAX_RUNTIME_MS = 280000; // ~4.7 min; under the 6-min GAS ceiling
 
 // ============================================================
 // PHASE 0 — WRITE ENDPOINT
@@ -224,33 +238,34 @@ function json(obj) {
 }
 
 // ============================================================
-// PHASE 1 — ENRICHMENT PIPELINE
+// PHASE 1 + LAYER 2 — ENRICHMENT PIPELINE
 // ============================================================
 /*
-   enrichBatch() is the time-driven target. Each run:
-     1. Picks up to ENRICH_BATCH (15) rows where isbn is blank AND the row
-        has never been tried (enrich_tried blank).
-     2. For each: queries Google Books, then Open Library, by title+author.
-     3. Writes back BY ID, blanks only: isbn (preferred), year_pub, and
-        cover_override ONLY when there is a direct cover URL but no isbn
-        (when isbn is found, the site derives the cover from it).
-     4. Stamps enrich_tried with an ISO timestamp on EVERY attempt — so a
-        no-match row is never retried forever, and the batch is idempotent.
+   enrichBatch() is the time-driven target. Each run, for up to ENRICH_BATCH
+   rows that still need work (rowNeedsWork_):
+     1. META (blank-only): if isbn is blank, query Google Books then Open
+        Library by title+author; write isbn (preferred) and year_pub only
+        where currently blank.
+     2. COVER (verified): check whether Open Library actually serves a cover
+        for the ISBN the CLIENT will request (-M, both ISBN forms). If yes,
+        leave cover_override blank — the client's OL-by-ISBN candidate loads
+        it. If OL is DEFINITIVELY empty (404 / tiny placeholder), verify the
+        Google/OL fallback cover URL and write it into cover_override. If OL
+        was merely inconclusive (429 / 5xx), write nothing and retry later.
+     3. STATE: enrich_tried holds "" | "<n>" | "ok" | "exhausted". Legacy
+        ISO-timestamp / TRUE values are read as one prior attempt and RE-
+        CHECKED, which unsticks rows the old write-once flag had stranded.
 
    SETUP / TEST / ARM:
-     - One-time manual test:  Apps Script editor -> select `enrichBatch` ->
-       Run -> authorize (UrlFetch + Sheets) -> watch the Execution log.
+     - One-time manual test:  editor -> select `enrichBatch` -> Run ->
+       authorize (UrlFetch + Sheets) -> watch the Execution log.
      - Arm the hourly timer:  select `installEnrichTrigger` -> Run once.
      - Disarm:                select `removeEnrichTriggers` -> Run once.
-
-   RATE / QUOTA MATH (see notes at bottom of this section):
-     40 books, all isbn-blank -> 3 hourly runs clear them (15 + 15 + 10).
-     Per run: <= 15 * 2 = 30 external fetches (Google Books, then Open
-     Library only on miss). Hourly cap -> <= 720 fetches/day. Well under
-     UrlFetchApp's 20,000/day quota and typical keyless API tolerances.
+     - Revive give-ups:       select `resetExhausted` -> Run once.
 */
 
 function enrichBatch() {
+  const startMs = Date.now();
   const sheet = getSheet();
   if (!sheet) { Logger.log("Sheet not found: " + SHEET_NAME); return; }
 
@@ -271,60 +286,78 @@ function enrichBatch() {
   const yearIdx = COL["year_pub"];
   const triedIdx = triedCol - 1; // 0-based into the row array
 
-  let processed = 0, matched = 0;
+  let processed = 0, resolved = 0;
 
-  for (let i = 0; i < data.length && processed < ENRICH_BATCH; i++) {
+  for (let i = 0; i < data.length; i++) {
+    if (processed >= ENRICH_BATCH) break;
+    if (Date.now() - startMs > ENRICH_MAX_RUNTIME_MS) { Logger.log("Time budget hit; stopping early."); break; }
+
     const row = data[i];
     const id = String(row[idIdx]).trim();
     const isbn = String(row[isbnIdx]).trim();
+    const coverOverride = String(row[coverIdx]).trim();
     const tried = String(row[triedIdx] || "").trim();
-
-    // Candidate predicate: missing ISBN AND never tried.
-    if (isbn !== "" || tried !== "") continue;
-
+    const yearCell = String(row[yearIdx]).trim();
     const title = String(row[titleIdx]).trim();
     const author = String(row[authorIdx]).trim();
+
+    const stateRow = { isbn: isbn, cover_override: coverOverride, enrich_tried: tried };
+    if (!rowNeedsWork_(stateRow)) continue;
     if (!title) continue;
 
     processed++;
     const sheetRow = i + 2; // stable: no inserts/deletes happen in this loop
-    const stamp = new Date().toISOString();
+
+    const needMeta = (isbn === "");
+    const needCover = !coverResolved_(stateRow);
 
     let found = null;
-    try {
-      found = lookupGoogleBooks(title, author);
-      if (!found || !found.isbn) {
-        const ol = lookupOpenLibrary(title, author);
-        // Merge: prefer Google for any field it filled, fall back to OL.
-        found = mergeFindings(found, ol);
+    if (needMeta || needCover) {
+      try {
+        found = lookupGoogleBooks(title, author);
+        if (!found || !found.isbn) {
+          const ol = lookupOpenLibrary(title, author);
+          found = mergeFindings(found, ol); // prefer Google, fall back to OL
+        }
+      } catch (err) {
+        Logger.log("Lookup error for " + id + " (" + title + "): " + err);
+        found = null;
       }
-    } catch (err) {
-      Logger.log("Lookup error for " + id + " (" + title + "): " + err);
-      found = null;
     }
 
-    // Always stamp the attempt so we never retry this row blindly.
-    sheet.getRange(sheetRow, triedCol).setValue(stamp);
-
-    if (found) {
-      // isbn — only if we have one and the cell is blank (it is, by predicate).
-      if (found.isbn) {
-        sheet.getRange(sheetRow, isbnIdx + 1).setValue(found.isbn);
-      }
-      // year_pub — only if found and currently blank.
-      if (found.year && String(row[yearIdx]).trim() === "") {
-        sheet.getRange(sheetRow, yearIdx + 1).setValue(found.year);
-      }
-      // cover_override — ONLY when no isbn (so the isbn cover path won't
-      // resolve) but we do have a direct cover URL, and the cell is blank.
-      if (!found.isbn && found.cover && String(row[coverIdx]).trim() === "") {
-        sheet.getRange(sheetRow, coverIdx + 1).setValue(found.cover);
-      }
-      if (found.isbn || found.cover || found.year) matched++;
+    // --- metadata writes (blank-only) ---
+    let effIsbn = isbn;
+    if (needMeta && found && found.isbn) {
+      sheet.getRange(sheetRow, isbnIdx + 1).setValue(found.isbn);
+      effIsbn = found.isbn;
     }
+    if (found && found.year && yearCell === "") {
+      sheet.getRange(sheetRow, yearIdx + 1).setValue(found.year);
+    }
+
+    // --- cover verification ---
+    let olState = "none";
+    if (effIsbn) {
+      const forms = isbnForms_(effIsbn);
+      const states = [];
+      for (let f = 0; f < forms.length; f++) states.push(olCoverStatus_(forms[f]));
+      olState = combineOlStates_(states);
+    }
+    const fallbackUrl = cleanCoverUrl_(found ? found.cover : "");
+    const fallbackOk = (olState === "none" && fallbackUrl) ? verifyImageUrl_(fallbackUrl) : false;
+    const dec = decideCover_(coverOverride, olState, fallbackUrl, fallbackOk);
+    if (dec.writeOverride && coverOverride === "") {
+      sheet.getRange(sheetRow, coverIdx + 1).setValue(dec.writeOverride);
+    }
+
+    // --- stamp retry state ---
+    sheet.getRange(sheetRow, triedCol).setValue(nextTried_(tried, dec.coverResolved));
+    if (dec.coverResolved) resolved++;
+
+    Utilities.sleep(ENRICH_SLEEP_MS);
   }
 
-  Logger.log("enrichBatch: processed " + processed + ", matched " + matched);
+  Logger.log("enrichBatch: processed " + processed + ", coversResolved " + resolved);
 }
 
 /* Ensure the enrich_tried tracking column exists (appended after the
@@ -340,7 +373,7 @@ function ensureEnrichTriedColumn(sheet) {
   return newCol;
 }
 
-// ---- external lookups -------------------------------------------
+// ---- external lookups (unchanged from Phase 1) ------------------
 
 /* Google Books — keyless. Targeted query (intitle + inauthor). Returns
    { isbn, year, cover } or null. */
@@ -425,7 +458,7 @@ function mergeFindings(g, o) {
   };
 }
 
-// ---- match guards + cleaners ------------------------------------
+// ---- match guards + cleaners (unchanged from Phase 1) -----------
 
 /* Guard against writing a wildly-wrong ISBN: require meaningful title
    overlap (token Jaccard >= 0.5) or a containment relationship. */
@@ -458,7 +491,103 @@ function cleanIsbn(s) {
   return String(s || "").replace(/[^0-9Xx]/g, "").toUpperCase();
 }
 
-// ---- trigger management -----------------------------------------
+// ============================================================
+// LAYER 2 — verified-cover + retry-state helpers
+// ============================================================
+
+// ---- ISBN normalization + 10<->13 conversion (for OL both-form check) ----
+function normalizeIsbn_(raw) {
+  if (raw == null) return "";
+  let s = String(raw).trim().toUpperCase();
+  if (/E\+?\d+$/.test(s) && s.indexOf(".") >= 0) {   // float-coercion artifact
+    const n = Number(s);
+    if (isFinite(n)) s = n.toFixed(0);
+  }
+  return s.replace(/[^0-9X]/g, "");
+}
+function isbn13Check_(f) { let s = 0; for (let i = 0; i < 12; i++) s += (i % 2 ? 3 : 1) * Number(f[i]); return (10 - (s % 10)) % 10; }
+function isbn10Check_(f) { let s = 0; for (let i = 0; i < 9; i++) s += (10 - i) * Number(f[i]); const c = (11 - (s % 11)) % 11; return c === 10 ? "X" : String(c); }
+function isbn10to13_(x) { if (x.length !== 10) return ""; const c = "978" + x.slice(0, 9); return c + String(isbn13Check_(c)); }
+function isbn13to10_(x) { if (x.length !== 13 || x.slice(0, 3) !== "978") return ""; const c = x.slice(3, 12); return c + isbn10Check_(c); }
+function isbnForms_(raw) {
+  const s = normalizeIsbn_(raw);
+  if (s.length !== 10 && s.length !== 13) return s ? [s] : [];
+  const f = [s];
+  if (s.length === 10) { const t = isbn10to13_(s); if (t && f.indexOf(t) < 0) f.push(t); }
+  if (s.length === 13) { const t = isbn13to10_(s); if (t && f.indexOf(t) < 0) f.push(t); }
+  return f;
+}
+
+// ---- enrich_tried state machine ----
+function blank_(v) { return String(v == null ? "" : v).trim() === ""; }
+function enrichState_(cell) {
+  const v = String(cell == null ? "" : cell).trim().toLowerCase();
+  if (v === "") return { done: false, exhausted: false, attempts: 0 };
+  if (v === "ok") return { done: true, exhausted: false, attempts: 0 };
+  if (v === "exhausted") return { done: false, exhausted: true, attempts: MAX_ATTEMPTS };
+  const n = parseInt(v, 10);
+  if (!isNaN(n) && String(n) === v) return { done: false, exhausted: false, attempts: n };
+  // legacy truthy / ISO-timestamp (old write-once pipeline): one prior
+  // attempt, NOT done -> Layer 2 re-checks the cover and unsticks it.
+  return { done: false, exhausted: false, attempts: 1 };
+}
+function coverResolved_(row) {
+  if (!blank_(row.cover_override)) return true;   // manual or prior fallback present
+  return enrichState_(row.enrich_tried).done;      // "ok" = OL-verified good
+}
+function rowNeedsWork_(row) {
+  const st = enrichState_(row.enrich_tried);
+  if (st.done || st.exhausted) return false;
+  if (st.attempts >= MAX_ATTEMPTS) return false;
+  return blank_(row.isbn) || !coverResolved_(row);
+}
+function nextTried_(prevCell, coverResolvedNow) {
+  if (coverResolvedNow) return "ok";
+  const attempts = enrichState_(prevCell).attempts + 1;
+  return attempts >= MAX_ATTEMPTS ? "exhausted" : String(attempts);
+}
+
+// ---- cover decision (pure, given verified network results) ----
+function combineOlStates_(states) {
+  if (states.indexOf("have") >= 0) return "have";
+  if (states.indexOf("error") >= 0) return "error";
+  return "none";
+}
+function decideCover_(existingOverride, olState, fallbackUrl, fallbackOk) {
+  if (!blank_(existingOverride)) return { writeOverride: null, coverResolved: true }; // never clobber a set override
+  if (olState === "have") return { writeOverride: null, coverResolved: true };         // client OL-by-ISBN will load it
+  if (olState === "error") return { writeOverride: null, coverResolved: false };        // inconclusive: retry, no fallback
+  if (fallbackUrl && fallbackOk) return { writeOverride: fallbackUrl, coverResolved: true };
+  return { writeOverride: null, coverResolved: false };
+}
+function cleanCoverUrl_(url) {
+  if (!url) return "";
+  return String(url).replace(/^http:\/\//i, "https://").replace(/&edge=curl/gi, "");
+}
+
+// ---- cover verification (network) ----
+function urlStatus_(url) {
+  const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  let bytes = 0;
+  try { bytes = resp.getBlob().getBytes().length; } catch (e) { bytes = 0; }
+  return { code: resp.getResponseCode(), bytes: bytes };
+}
+// "have" | "none" | "error" — error reserved for inconclusive (429/5xx/network).
+function olCoverStatus_(isbn) {
+  if (!isbn) return "none";
+  const r = urlStatus_("https://covers.openlibrary.org/b/isbn/" + isbn + "-M.jpg?default=false");
+  if (r.code === 200 && r.bytes >= MIN_COVER_BYTES) return "have";
+  if (r.code === 404) return "none";
+  if (r.code === 200) return "none";   // 200 but tiny -> placeholder, treat as none
+  return "error";                       // 429/5xx/etc
+}
+function verifyImageUrl_(url) {
+  if (!url) return false;
+  const r = urlStatus_(url);
+  return r.code === 200 && r.bytes >= MIN_COVER_BYTES;
+}
+
+// ---- trigger management (unchanged from Phase 1) ----------------
 
 /* Run ONCE to arm the hourly timer. Idempotent: clears any existing
    enrichBatch triggers first so you never stack duplicates. */
@@ -484,20 +613,34 @@ function removeEnrichTriggers() {
   Logger.log("Removed " + removed + " enrichBatch trigger(s).");
 }
 
+/* Run ONCE to revive rows that hit "exhausted" (e.g. after a long OL
+   outage). Clears their enrich_tried so the next batch retries them. */
+function resetExhausted() {
+  const sheet = getSheet();
+  if (!sheet) return;
+  const triedCol = ensureEnrichTriedColumn(sheet);
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const vals = sheet.getRange(2, triedCol, last - 1, 1).getValues();
+  let n = 0;
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim().toLowerCase() === "exhausted") {
+      sheet.getRange(i + 2, triedCol).setValue(""); n++;
+    }
+  }
+  Logger.log("reset " + n + " exhausted row(s).");
+}
+
 /*
-   RATE / QUOTA NOTES
-   ------------------
-   Batch = 15 rows/run, hourly.
-   - Current data: 40 rows, all isbn-blank -> 15 + 15 + 10 = 3 runs to clear
-     (~3 hours). After that, each run finds 0 candidates and does no fetches.
-   - Per-run external calls: 1 Google Books call per row always; 1 Open
-     Library call only when Google misses an ISBN. Worst case 2/row = 30/run.
-   - Daily worst case (timer never idle): 30 * 24 = 720 fetches/day.
-     UrlFetchApp quota for consumer Google accounts is 20,000/day -> ~3.6%.
-   - Google Books keyless: tolerant for low volume; if you ever see HTTP 429,
-     drop ENRICH_BATCH or widen cadence to every 2-3 hours. (confidence:
-     moderate — keyless Books limits are not formally published.)
-   - Open Library: no key, no hard published cap; 1 call/row on misses only.
-   New form-adds (one isbn-blank row at a time) are absorbed by the next
-   hourly run with negligible additional load.
+   RATE / QUOTA NOTES (Layer 2)
+   ----------------------------
+   Batch = 15 rows/run, hourly. Per qualifying row, worst case:
+     1 Google Books + 1 Open Library (meta) + 2 OL cover GETs (both ISBN
+     forms) + 1 fallback verify  ≈ 5 fetches/row -> ~75/run -> ~1,800/day
+   if the timer never idles. UrlFetchApp quota is 20,000/day -> ~9%.
+   Covers converge then the batch goes quiet: once a row is "ok"/"exhausted"
+   it no longer qualifies. If OL throttles (HTTP 429) you'll see covers stay
+   unresolved and attempts climb; that's the "error" path holding off on a
+   wrong Google fallback — widen cadence or lower ENRICH_BATCH if persistent.
+   (confidence: keyless Books/OL limits are not formally published — moderate.)
 */
